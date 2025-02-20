@@ -1,0 +1,152 @@
+---
+title: "ESM 244 Lab 3: Spatial kriging"
+author: 
+  - Casey O'Hara
+  - Nathan Grimes
+  - Allison Horst
+  - Yutian Fang
+format: 
+  html:
+    code-fold: show
+    toc: true
+    number-sections: true
+    embed-resources: true
+editor: visual
+execute:
+  echo: true
+  message: false
+  warning: false
+---
+
+```{r setup}
+library(tidyverse)
+library(here)
+### for working with vector spatial data:
+library(sf)
+
+### for working with rasters:
+library(terra)
+library(tidyterra)
+
+### for the geospatial statistics:
+library(gstat)
+library(stars)
+```
+
+# Overview
+
+Here we will explore creating a variogram in R using groundwater depth data, and use that variogram to estimate groundwater depth in other areas. To do this, we will interpolate missing values using the kriging method.
+
+# Read in the California depth-to-groundwater data
+
+**Data source:** California Department of Water Resources. (2016). Groundwater Depth, California, Fall 2013. California Department of Water Resources. Available at: http://purl.stanford.edu/py212tb3061.
+
+These data are measurements for depth to groundwater recorded in 2013. We'll read in the layer with `read_sf()`, check the CRS, then make a quick plot to start.
+
+```{r}
+### Read in the CA county data (TIGER shapefile):
+ca_counties_sf <- read_sf(here("data/ca_counties"), layer = "CA_Counties_TIGER2016") %>% 
+  janitor::clean_names() %>% 
+  select(name)
+
+### Read in the depth to groundwater layer: 
+ca_dgw_sf <- read_sf(here('data/ca_dgw', 
+                          'ca_dgw_for_lab.gpkg')) %>% 
+  janitor::clean_names()
+
+```
+
+## Explore the data
+
+Take time to check the CRSs for each layer, transform if necessary, and then make a quick visualization. Make sure to rename the depth column to something more useful such as `depth`.
+
+```{r}
+
+```
+
+
+# Focus on San Joaquin County
+
+Let's just look at depth to groundwater (ft) in and around San Joaquin County. Filter out San Joaquin county. Then use `st_intersections` to "cut" out all the groundwater plots contained in San Joaquin. Finally, make a quick plot of the county and the wells using depth as a color aesthetic.
+
+
+
+# Spatial interpolation
+
+## Make a variogram
+
+Examine the `variogram()` function from `gstat`. The first input is a formula like we use for regressions or any other models. What do you think adding a covariate helps with?
+
+For now we will only use depth as the output.
+
+```{r}
+sj_dgw_vgm <- gstat::variogram(depth ~ 1, data = sj_depth_sf)
+### what if we wanted to consider other covariates? e.g., elevation?
+# sj_dgw_vgm <- gstat::variogram(depth ~ gs_elevati, data = sj_depth_sf)
+
+### Plot it
+plot(sj_dgw_vgm) 
+
+
+```
+
+One we have built the variogram object, we need to specify how to fit it. This is similar in tidymodels where we use fit() after building our workflow to fit the model on training data. Now we need to tell which type of model to run and whether to include a nugget that is not equal to zero.  See `?fit.variogram` for more information.
+
+
+```{r}
+
+### Now create the variogram model, & see ?vgm for other model options: 
+vgm_fit <- fit.variogram(sj_dgw_vgm,
+                         model = vgm(model = "Gau", 
+                                     nugget = TRUE))
+
+### Plot them together:
+plot(sj_dgw_vgm, vgm_fit) 
+
+### You can check the sum of squares of residuals for different models: 
+attr(vgm_fit, 'SSErr') # ...and you could compare to other models...
+```
+
+
+## Spatial kriging
+
+Variograms inform our $\lambda_\alpha$ term in the kriging formula, basically how to interpolate data that is or not correlated with each other distance. Kriging works best in grid formats so first we'll draw a box around the county sf then make a 1000x1000 boxes inside the new box.
+
+```{r}
+### Make a grid over which we'll krige: 
+sj_grid <- st_bbox(sj_county_sf) %>%
+  stars::st_as_stars(dx = 1000, dy = 1000)
+
+### Look at the grid we made: 
+plot(sj_grid)
+
+### Perform ordinary kriging: 
+dgw_krige <- krige(depth ~ 1, 
+                   sj_depth_sf, 
+                   sj_grid, 
+                   model = vgm_fit)  # notice this is where our variogram comes
+
+### Initial plot of kriging outcome: 
+plot(dgw_krige)
+```
+
+## Making a final plot
+
+Let's map out the interpolation of ground water values from the krige. First, make the krige a raster as a raster best matches the grid format we defined. Then use `tidyterra` to create a ggplot geom through the `geom_spatraster` function.
+
+```{r}
+### Convert krige object to a raster using the terra package
+krige_rast <- dgw_krige %>% 
+  ### tell it the x, y, and CRS
+  terra::rast() %>%
+  setNames(c('pred', 'var'))
+
+### Then we can use ggplot: 
+ggplot() +
+  tidyterra::geom_spatraster(data = krige_rast, aes(fill = pred)) +
+  geom_sf(data = sj_depth_sf, aes(fill = depth), shape = 21) +
+  geom_sf(data = sj_county_sf, color = 'black', fill = NA) +
+  scale_fill_gradient(low = "blue", high = "yellow")
+```
+
+We could try other models and compare how well these other models predict well depth, using cross validation - set aside a few wells out of our dataset, train the variogram on the remaining wells, run the interpolation, then see how well the kriging model predicts those set-aside wells.

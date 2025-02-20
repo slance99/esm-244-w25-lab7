@@ -1,0 +1,190 @@
+---
+title: "Post Lab 3 Practice"
+subtitle: "Answer Key"
+author: "Nathaniel Grimes"
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute:
+  echo: true
+  message: false
+  warning: false
+---
+
+## Attach Packages and Load Data
+
+```{r}
+library(tidyverse)
+library(here)
+library(broom)
+library(patchwork)
+# Spatial data packages
+library(sf)
+library(gstat)
+
+
+#Load data
+pop_den<-read_sf(here("data","pop_dens","sbc_pop_dens.shp")) %>% janitor::clean_names()
+
+ca_counties_raw_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))
+
+# Clean the  SBcounty data here
+sb_county_sf <- ca_counties_raw_sf %>% 
+  janitor::clean_names() %>%
+  filter(name=="Santa Barbara") %>% 
+  select(county = name)
+```
+
+# Visualization and Cleaning:
+
+Before we conduct spatial data analysis there are a few tasks we ought to complete. As always, visualize your data and examine its contents. Spatial data has the extra requirement that we need to make sure it contains the same cordinate reference systems (crs) between layers.
+
+```{r}
+#| eval: false
+
+st_crs(pop_den)
+st_crs(sb_county_sf)
+```
+
+Our population density for Santa Barbara uses EPSG 4326 while the county lines use the mercator EPSG 3857. Both of these CRS are the most commonly used so we can use either, but we need to be consistent. Let's stick with the county line crs because it uses the [projected coordinate system Google Maps also uses](https://gis.stackexchange.com/questions/48949/epsg-3857-or-4326-for-web-mapping).
+
+```{r}
+pop_den_sf <- st_transform(pop_den, st_crs(sb_county_sf))
+```
+
+```{r}
+#| fig-cap: "Population density of Santa Barbara County. Dark red spots indicate dense population centers whereas light colors show sparse populations. Channel Islands are included, but are not populated."
+#| label: fig-pop-den
+
+library(latex2exp)  # I use latex to write math. I find this package useful to write mathy ggplot labels
+
+ggplot()+
+  geom_sf(data=sb_county_sf,fill='white',linewidth=1,color='black')+
+  geom_sf(data=pop_den_sf,aes(color=popdens))+
+  scale_color_gradientn(colours=pals::ocean.amp(10))+
+  labs(color=TeX("$\\frac{Population}{km^2}$"))+
+  theme_void()
+  
+```
+
+Colors are an important component of data visualization. [Emil Hvitfeldt probably has the best collection and description of color palettes in R, including how to use them](https://github.com/EmilHvitfeldt/r-color-palettes). He also shows why the default color page doesn't work well for people with color blindness. One of my favorite packages because I deal with spatial ocean data is the `pals` palette which has a set layer of color scales for abiotic factors like turbidity, wind speed, wave height, and others. Not really useful for population density, but in case you want to use it for later I included how to use it here.
+
+Our population density values look okay. We see deep pockets of density in Santa Barbara city, Santa Maria, and a massive density in IV. But most of the county is relatively sparse so we might be missing some extra information as the color scale as to account for all the essentially zero values. Let's check a histogram of the population density and a log transformed historgram.
+
+```{r}
+#| label: fig-hist
+#| fig-cap: "*Historgram plots* $\\beta$ of population density in Santa Barbara County. Panel A shows the raw population density. Panel B is the log transformed data."
+
+
+pop_log<-pop_den_sf %>% 
+  mutate(log_pop=log(popdens))
+
+hist_norm<-pop_log %>% 
+  ggplot()+
+  geom_histogram(aes(x=popdens),fill='darkred')+
+  theme_minimal()+
+  labs(x="Population Density",y='')+
+  scale_x_continuous(expand=c(0,0))+
+  scale_y_continuous(expand=c(0,0)) # Idon't like the gap between the axis
+
+
+
+hist_log<-pop_log %>% 
+  ggplot()+
+  geom_histogram(aes(x=log_pop),fill='darkred')+
+  theme_minimal()+
+  labs(x="Log Population Density",y='')+
+  scale_x_continuous(expand=c(0,0))+
+  scale_y_continuous(expand=c(0,0)) # Idon't like the gap between the axis
+
+hist_patch<-hist_norm+hist_log+
+  plot_annotation(tag_levels='A')
+
+wrap_elements(hist_patch)+
+  labs(tag="Count")+
+  theme(plot.tag.position = 'left',
+        plot.tag = element_text(size = rel(1), angle = 90),)
+```
+
+Clearly from panel A in @fig-hist the data is not normally distributed and as pointed out in the map there are many essentially zero values for the national forest and ranching lands in the interior of the county. Log transforming the data makes it look more normal. Notice however, the interpretablilty is slightly lost. What does -5 log of population density mean? This step is necessary for variograms and kriging, but be cautious when showing these results and provide clear meaning to the context.
+
+# Variograms and Kriging:
+
+The next step is to understand how distance affects population density. Kriging will also us to make predictions on the population density of Santa Barbara county using known values. The first step in kriging is to build a variogram. We have to use the log transformed data to better account for the variance.
+
+```{r}
+log_vgm <- gstat::variogram(log_pop ~ 1, data =pop_log )
+```
+
+```{r}
+#| label: fig-vario
+#| fig-cap: 'Exploratory Variogram of the log population density in Santa Barbara County'
+
+### Plot it
+plot(log_vgm) 
+```
+
+The variogram has a well defined range at 40 km and a sill at approximately 15. Review class notes if you can't identify those points from the graph. The nugget is a bit trickier. From our graph it looks like it should be zero. Let's run two models to fit the variogram: one with a nugget and another without. We'll use the sum of squared residuals to compare. Whichever has the lowest will be the chosen model.
+
+```{r}
+### Now create the variogram model, & see ?vgm for other model options: 
+log_fit_nug <- fit.variogram(log_vgm,
+                         model = vgm(model = "Gau", nugget = TRUE))
+
+log_fit<-fit.variogram(log_vgm,
+                        
+                         model = vgm(model = "Gau"))
+
+
+### You can check the sum of squares of residuals for different models: 
+nug_sse<-signif(attr(log_fit_nug, 'SSErr'),3)
+
+no_nug_sse<-signif(attr(log_fit,'SSErr'),3)
+```
+
+Though the graph shows including a nugget might not be worthwhile, the model with the nugget just slightly outperforms the one without `r nug_sse` vs `r no_nug_sse`. Now we can move onto kriging to interpolate population density values for Santa Barbara county
+
+```{r}
+#| label: fig-interpolate
+#| fig-cap: 'Kriging interpolation of population densities in Santa Barbara county. Dark, cool colors represent low population densities. Densely populated centers are shown by bright yellow. Panel A shows the predicted population density. Panel B is the variance of the predictions with higher variances in the same color interpretation.'
+
+### Make a grid over which we'll krige: 
+sb_grid <- st_bbox(sb_county_sf) %>%
+  stars::st_as_stars(dx = 1000, dy = 1000)
+
+### Perform ordinary kriging: 
+pop_krige <- krige(log_pop ~ 1, pop_log, sb_grid, model = log_fit_nug)
+
+### Convert krige object to a raster using the terra package
+krige_rast <- pop_krige %>% 
+  ### tell it the x, y, and CRS
+  terra::rast() %>%
+  setNames(c('pred', 'var'))
+
+norm_krige_rast<-exp(krige_rast)
+
+### Then we can use ggplot: 
+pred<-ggplot() +
+  tidyterra::geom_spatraster(data = norm_krige_rast, aes(fill = pred)) +
+  geom_sf(data = pop_log, shape = 21,size=1,alpha=0.7) +
+  geom_sf(data = sb_county_sf, color = 'black', fill = NA) +
+  scale_fill_gradientn(colors=pals::ocean.haline(5))+
+  theme_void()+
+  labs(fill="Predicted\npopulation\ndensity")
+
+var_plot<-ggplot() +
+  tidyterra::geom_spatraster(data = norm_krige_rast, aes(fill = var)) +
+  geom_sf(data = pop_log, shape = 21,size=1,alpha=0.7) +
+  geom_sf(data = sb_county_sf, color = 'black', fill = NA) +
+  scale_fill_gradientn(colors=pals::ocean.haline(5))+
+  theme_void()+
+  labs(fill="Population\ndensity\nvariance")
+
+pred+var_plot+
+  plot_annotation(tag_levels='A')
+```
+
+The model predicts well and matches our expectations that IV, Santa Maria, Goleta, and Santa Barbara City all have denser population centers. The variance on the other hand may seem a bit perplexing. The large swath of area in the channel islands and surrounding ocean with no values creates huge variance in the predictive model. How can you predict when there are no observations? A more detailed analysis would require us to [remove the channel islands through intersection techniques](https://cran.r-project.org/web/packages/sf/vignettes/sf3.html) and then redo the same analysis with the island polygons eliminated as nobody lives there. For now this is sufficient and clean analysis.

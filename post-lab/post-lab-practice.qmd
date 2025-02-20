@@ -1,0 +1,62 @@
+---
+title: "Post Lab 3 Practice"
+subtitle: "Answer Key"
+author: "Nathaniel Grimes"
+format: 
+  html:
+    code-fold: true
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute:
+  echo: true
+  message: false
+  warning: false
+---
+
+## Attach Packages and Load Data
+
+```{r}
+library(tidyverse)
+library(here)
+library(broom)
+library(patchwork)
+# Spatial data packages
+library(sf)
+library(gstat)
+
+
+#Load data
+pop_den<-read_sf(here("data","pop_dens","sbc_pop_dens.shp")) %>% janitor::clean_names()
+
+ca_counties_raw_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))
+
+# Clean the  SBcounty data here
+sb_county_sf <- ca_counties_raw_sf %>% 
+  janitor::clean_names() %>%
+  filter(name=="Santa Barbara") %>% 
+  select(county = name)
+```
+
+# Visualization and Cleaning:
+
+Before we conduct spatial data analysis there are a few tasks we ought to complete. As always, visualize your data and examine its contents. Spatial data has the extra requirement that we need to make sure it contains the same cordinate reference systems (crs) between layers.
+
+**1. Transform crs of the layers to match each other**
+
+**2. Plot the population densities in Santa Barbara county.**
+
+  - What do you observe about the density? How to could we handle the sparsity of points in the Los Padres National Forest?
+  
+**3. Log Transform the population density data**
+
+**4. Build a variogram of population density**
+
+**5. Plot the fitted variogram and identify the sill, range, and nugget**
+
+  - Optional: Compare the models with nugget = true and nugget =FALSE. Use the attr to get the sum of squared error to compare the fits
+  
+**6. Interpolate the density with the krige function**
+
+**7. Plot the interpolation as a ggplot suitable for publication**
+

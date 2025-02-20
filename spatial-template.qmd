@@ -1,0 +1,162 @@
+---
+title: "ESM 244 Lab 7: Working with spatial data"
+author:
+  - Nathan Grimes
+  - Yutian Fang
+  - Casey O'Hara
+  - Allison Horst
+format: 
+  html:
+    code-fold: show
+    toc: true
+    number-sections: true
+    embed-resources: true
+execute:
+  echo: true
+  message: false
+  warning: false
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(broom)
+
+# Spatial data packages
+library(sf)
+```
+
+# Overview: Spatial data wrangling and visualization
+
+## California county outlines (polygons)
+
+### Read it in with `read_sf`
+
+First, let's read in the California county shapefile:
+
+```{r}
+ca_counties_raw_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))
+```
+
+Note we only have to point to the .shp file, not all the others that are related.
+
+## Do a bit of wrangling
+
+Use `View(ca_counties)` to check out what it contains. Let's simplify it by first converting area to km^2^ instead of m^2^, then only keeping county name and area.
+
+All `tidyverse` and `dplyr` functions work the same as before!
+
+```{r}
+ca_counties_sf <- ca_counties_raw_sf |> 
+```
+
+What if we wanted just the dataframe, without the geometry? Convert to dataframe and select out the geometry column:
+
+```{r}
+ca_counties_df <- ca_counties_sf |> 
+```
+
+## Check and set the CRS
+
+Use `st_crs()` to check the existing CRS for spatial data. We see that this CRS is "pseudo-mercator" based on WGS 84 - primarily used for web mapping, not analysis. WGS84 (epsg:3857), also note proj4 string and WKT definitions.
+
+```{r}
+ca_counties_sf |>  st_crs()
+```
+
+## Explore it visually
+
+Plot the California counties using `geom_sf()`. Notice that we can update aesthetics just like we would for a regular ggplot object. Here, we update the color based on land area (and change the color gradient).
+
+# Invasive red sesbania records (spatial points)
+
+## Read in the sesbania data
+
+The data exist in `data/red_sesbania`, and the shapefile is stored as `ds80_for_lab.gpkg`. We also want to check the coordinate reference system, and plot the data for a quick visual understanding.
+
+```{r}
+sesbania_sf <- read_sf(here("data","red_sesbania","ds80_for_lab.gpkg")) |> 
+  janitor::clean_names()
+
+```
+
+## The analysis:
+
+Let's say we want to find the count of red sesbania observed locations in this dataset *by county*. We then want to create a map of all CA counties using fill color to indicate sesbania counts.
+
+Write pseudocode to accomplish this.
+
+### Pseudocode
+
+## Transform CRS so records match counties
+
+Notice that this CRS is different from the California counties CRS, so we'll want to update it to match. Use `st_transform()` to update the CRS:
+
+```{r}
+### if you know the EPSG code:
+sesbania_3857_sf <- st_transform(sesbania_sf, 3857)
+
+
+### if you don't know the EPSG code:
+sesbania_3857_2_sf <- st_transform(sesbania_sf, st_crs(ca_counties_sf))
+
+# Then check it: 
+sesbania_3857_sf |>  st_crs()
+```
+
+Cool, now they have the same CRS.
+
+### Plot them together!
+
+## Spatial join
+
+How can I go about joining these data so that I can find counts by county? Don't worry...`st_join()` has you covered for spatial joins!
+
+```{r}
+ca_sesb_sf <- ca_counties_sf |> 
+  st_join(sesbania_3857_sf)
+
+head(ca_sesb_sf)
+```
+
+We can also join the other direction:
+
+```{r}
+sesb_counties_sf <- sesbania_3857_sf |> 
+  st_join(ca_counties_sf)
+
+head(sesb_counties_sf)
+```
+
+This one keeps the point geometry of the plant records, but appends the county name and area from the CA map.
+
+## Summarize observations by county
+
+Use the CA polygons`sf` object with the CA polygons to summarize the total number of sesbania in each. Watch out for `NAs`!
+
+```{r}
+sesb_counts_sf <- ca_sesb_sf |> 
+  group_by(county) |> 
+  summarize(n_records = XXXXX )
+
+```
+
+Then we can plot a choropleth using the number of records for red sesbania as the fill color (instead of what we used previously, land area):
+
+Make a choropleth map (filled in spatial map) using the number of records for red sesbania as the fill color (instead of what we used previously, land area):
+
+```{r}
+ggplot(data = sesb_counts_sf) +
+  geom_sf(aes(fill = n_records), color = "white", size = 0.1) +
+  scale_fill_gradientn(colors = c("lightgray","orange","red")) +
+  theme_minimal() +
+  labs(fill = "Number of S. punicea records")
+```
+
+Now, on your own let's practice our spatial data wrangling!
+
+Only plot the county with the greatest number of red sesbania records, and make a map of those locations.
+
+Hint: It's okay to break the steps apart, you don't need to do them all in one step (in fact it's probably preferred you don't).
+
+### Pseudocode here!
