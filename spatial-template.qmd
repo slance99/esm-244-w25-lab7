@@ -35,7 +35,7 @@ library(sf)
 First, let's read in the California county shapefile:
 
 ```{r}
-ca_counties_raw_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))
+ca_counties_raw_sf <- read_sf(here("data", "ca_counties", "CA_Counties_TIGER2016.shp"))v
 ```
 
 Note we only have to point to the .shp file, not all the others that are related.
@@ -48,12 +48,17 @@ All `tidyverse` and `dplyr` functions work the same as before!
 
 ```{r}
 ca_counties_sf <- ca_counties_raw_sf |> 
+  janitor::clean_names() |>
+  mutate(area_km2 = aland / 1e6) |>
+  select(county=name, area_km2)
 ```
 
 What if we wanted just the dataframe, without the geometry? Convert to dataframe and select out the geometry column:
 
 ```{r}
 ca_counties_df <- ca_counties_sf |> 
+  as.data.frame() |>
+  select(-geometry)
 ```
 
 ## Check and set the CRS
@@ -67,6 +72,15 @@ ca_counties_sf |>  st_crs()
 ## Explore it visually
 
 Plot the California counties using `geom_sf()`. Notice that we can update aesthetics just like we would for a regular ggplot object. Here, we update the color based on land area (and change the color gradient).
+
+```{r}
+ca_counties_plot <- ggplot(data = ca_counties_sf) +
+  geom_sf(aes(fill = area_km2), color = "white", size = 0.1) +
+  theme_void() +
+  scale_fill_viridis_c()
+
+ca_counties_plot
+```
 
 # Invasive red sesbania records (spatial points)
 
@@ -87,6 +101,12 @@ Let's say we want to find the count of red sesbania observed locations in this d
 Write pseudocode to accomplish this.
 
 ### Pseudocode
+
+-   Make in the same CRS
+
+-   Group by county and summarize by count n()
+
+-   Plot as layers the points for sesbania and the counties
 
 ## Transform CRS so records match counties
 
@@ -123,7 +143,7 @@ We can also join the other direction:
 
 ```{r}
 sesb_counties_sf <- sesbania_3857_sf |> 
-  st_join(ca_counties_sf)
+  st_join(ca_counties_sf) #puts the points directly into the polygon
 
 head(sesb_counties_sf)
 ```
@@ -135,10 +155,9 @@ This one keeps the point geometry of the plant records, but appends the county n
 Use the CA polygons`sf` object with the CA polygons to summarize the total number of sesbania in each. Watch out for `NAs`!
 
 ```{r}
-sesb_counts_sf <- ca_sesb_sf |> 
-  group_by(county) |> 
-  summarize(n_records = XXXXX )
-
+sesb_counts_sf <- ca_sesb_sf %>% 
+  group_by(county) %>%
+  summarize(n_records = sum(!is.na(id))) #take everything that is not an NA and sum 
 ```
 
 Then we can plot a choropleth using the number of records for red sesbania as the fill color (instead of what we used previously, land area):
@@ -160,3 +179,24 @@ Only plot the county with the greatest number of red sesbania records, and make 
 Hint: It's okay to break the steps apart, you don't need to do them all in one step (in fact it's probably preferred you don't).
 
 ### Pseudocode here!
+
+-   Identify which county has the highest sesbania using slice
+
+-   Filter out this county from sf file
+
+-   Filter to get all the points associated with that county
+
+```{r}
+max_county <- sesb_counts_sf |>
+  filter(n_records == max(n_records))
+
+max_points <- sesb_counties_sf |>
+  filter(county == "Solano")
+
+ggplot() +
+  geom_sf(data = max_county, 
+          color = "white", size = 0.1) +
+  geom_sf(data = max_points) +
+  theme_minimal() +
+  labs(fill = "Number of S. punicea records")
+```
